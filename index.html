@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Raven</title>
+<style>
+html,body{height:100%;margin:0;background:#010204;overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
+#veil{position:fixed;inset:0;z-index:10;background:#010204;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;transition:opacity 1.4s ease;user-select:none;-webkit-tap-highlight-color:transparent}
+#veil.gone{opacity:0;pointer-events:none}
+#veil.ready{cursor:pointer}
+#veil svg{width:84px;height:84px;filter:drop-shadow(0 0 16px rgba(255,214,140,.5));animation:breathe 3.4s ease-in-out infinite alternate}
+#txt{font-size:13px;letter-spacing:.38em;text-transform:uppercase;color:#a89b82;text-align:center;padding:0 24px}
+#veil.ready #txt{color:#f0dcae;animation:pulse 2.2s ease-in-out infinite}
+@keyframes breathe{from{transform:scale(.95);filter:drop-shadow(0 0 10px rgba(255,214,140,.35))}to{transform:scale(1.04);filter:drop-shadow(0 0 26px rgba(255,214,140,.7))}}
+@keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}
+</style>
+</head>
+<body>
+<div id="veil">
+  <svg viewBox="0 0 100 100" aria-hidden="true"><defs><mask id="cut"><rect width="100" height="100" fill="#fff"/><circle cx="62" cy="40" r="33" fill="#000"/></mask></defs><circle cx="46" cy="54" r="34" fill="#efe6cc" mask="url(#cut)"/></svg>
+  <div id="txt">Loading…</div>
+</div>
+<audio id="aud" crossorigin="anonymous" preload="auto"></audio>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/BokehShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/BokehPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+/* ============ EDIT ME ============ */
+const MODEL_URL='raven.glb';   // the raven model, same folder as this page
+const SONG_URL='song.mp3';     // <-- your song goes here (same folder). Change the name if you like.
+const LOOP_SONG=true;          // repeat the song
+const ALLOW_DRAG_ROTATE=true;  // let visitors drag to rotate the view
+const S={density:1.55,length:.85,thick:1.45,soft:.93,bright:2.25,glow:1.8,lights:0,life:1.6,sens:.85,curl:.7,hue:0,zone:.38,
+  spin:.15,dof:2.25,focus:0,lsmooth:1.85,stars:1.9,ca:.1,grain:1.2,vig:.5,moon:.75};
+/* ================================== */
+const _c=new THREE.Color();
+function rot(c,deg){_c.setRGB(c[0],c[1],c[2]);const h={};_c.getHSL(h);_c.setHSL((h.h+deg/360)%1,h.s,h.l);return[_c.r,_c.g,_c.b]}
+const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(devicePixelRatio,innerWidth<700?1.5:2));
+renderer.setClearColor(0x010204);
+document.body.prepend(renderer.domElement);
+const scene=new THREE.Scene();
+scene.fog=new THREE.FogExp2(0x010204,0.12);
+const camera=new THREE.PerspectiveCamera(38,1,.05,60);
+camera.position.set(2.6,1.2,4.2);
+const controls=new THREE.OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true;controls.autoRotate=true;controls.autoRotateSpeed=S.spin;controls.enableZoom=false;controls.enablePan=false;controls.enableRotate=ALLOW_DRAG_ROTATE;controls.maxDistance=9;controls.minDistance=1.2;
+
+/* ---------- lights: one soft colored light per frequency band, following its particles ---------- */
+const BANDS=[
+ {name:'bass',  f:[25,150],   col:[1.0,.34,.10], col2:[.9,.12,.05], size:[.020,.035], spd:[.20,.40], len:1.4, life:[1.6,2.8], base:.3, gain:14},
+ {name:'lowmid',f:[150,600],  col:[1.0,.55,.12], col2:[.85,.22,.05], size:[.014,.024], spd:[.30,.55], len:1.2, life:[1.4,2.4], base:.3, gain:16},
+ {name:'mid',   f:[600,3500], col:[1.0,.78,.22], col2:[.9,.45,.08], size:[.010,.018], spd:[.40,.80], len:1.0, life:[1.2,2.2],   base:.3, gain:18},
+ {name:'treble',f:[3500,15000],col:[1.0,.90,.55],col2:[1.0,.60,.15], size:[.006,.012], spd:[.60,1.1], len:.8,  life:[.8,1.5], base:.3, gain:22}
+];
+BANDS.forEach(b=>{
+  b.light=new THREE.PointLight(new THREE.Color(...b.col),0.3,1.4,2);
+  b.light.position.set(0,.5,.8);scene.add(b.light);
+  b.on=true;b.e=0;b.avg=0;b.last=0;b.hit=0;b.peak=.2;b.acc=0;b.cen=new THREE.Vector3(0,.4,.8);b.cn=0;b.cs=new THREE.Vector3();
+});
+scene.add(new THREE.AmbientLight(0x10142a,.35));
+const rim=new THREE.DirectionalLight(0x3a4a9a,.35);rim.position.set(-3,2,-4);scene.add(rim);
+const moon=new THREE.DirectionalLight(0xaab8ff,0);moon.position.set(-1.5,7,2);scene.add(moon);
+const sky=new THREE.HemisphereLight(0x8fa3ff,0x03040a,0);scene.add(sky);
+
+/* ---------- starfield ---------- */
+const NS=2600,sp3=new Float32Array(NS*3),sSz=new Float32Array(NS),sBr=new Float32Array(NS),sPh=new Float32Array(NS),sCol=new Float32Array(NS*3);
+for(let i=0;i<NS;i++){
+  const u=Math.random()*2-1,a=Math.random()*6.2832,r=18+Math.random()*28,q=Math.sqrt(1-u*u);
+  sp3[i*3]=r*q*Math.cos(a);sp3[i*3+1]=r*u;sp3[i*3+2]=r*q*Math.sin(a);
+  const m=Math.pow(Math.random(),3),w=Math.random();       // few bright stars, many faint ones
+  sSz[i]=1.2+2.4*m;sBr[i]=.25+.75*m;sPh[i]=Math.random()*100;
+  sCol[i*3]=.75+.25*w;sCol[i*3+1]=.85+.05*w;sCol[i*3+2]=1-.2*w;  // cool white -> faint warm
+}
+const sg=new THREE.BufferGeometry();
+sg.setAttribute('position',new THREE.BufferAttribute(sp3,3));sg.setAttribute('aSize',new THREE.BufferAttribute(sSz,1));
+sg.setAttribute('aBr',new THREE.BufferAttribute(sBr,1));sg.setAttribute('aPh',new THREE.BufferAttribute(sPh,1));sg.setAttribute('aCol',new THREE.BufferAttribute(sCol,3));
+const smat=new THREE.ShaderMaterial({transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,
+  uniforms:{uT:{value:0},uAmt:{value:1},uPx:{value:1},uTw:{value:0}},
+  vertexShader:`attribute float aSize,aBr,aPh;attribute vec3 aCol;uniform float uT,uAmt,uPx,uTw;varying vec3 vC;
+  void main(){float tw=.75+.25*sin(uT*(.6+fract(aPh)*1.4)+aPh);vC=aCol*aBr*tw*(1.+uTw*.8)*uAmt*.45;
+    gl_PointSize=aSize*uPx;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+  fragmentShader:`varying vec3 vC;void main(){float d=length(gl_PointCoord-.5)*2.;float a=exp(-d*d*4.)*(1.-smoothstep(.8,1.,d));gl_FragColor=vec4(vC,a);}`});
+const stars=new THREE.Points(sg,smat);stars.frustumCulled=false;scene.add(stars);
+
+/* ---------- raven ---------- */
+let raven=null,meshes=[],box=new THREE.Box3();
+const loader=new THREE.GLTFLoader();
+function loadGLB(){
+  return fetch(MODEL_URL).then(r=>{if(!r.ok)throw new Error(MODEL_URL+' not found ('+r.status+')');return r.arrayBuffer()})
+  .then(buf=>new Promise((ok,bad)=>loader.parse(buf,'',g=>{
+    if(raven)scene.remove(raven);
+    raven=g.scene;
+    box.setFromObject(raven);
+    const s=new THREE.Vector3();box.getSize(s);
+    const k=2.6/Math.max(s.x,s.y,s.z);
+    raven.scale.multiplyScalar(k);
+    box.setFromObject(raven);
+    const c=box.getCenter(new THREE.Vector3());
+    raven.position.sub(c);
+    raven.updateMatrixWorld(true);
+    box.setFromObject(raven);
+    meshes=[];
+    raven.traverse(o=>{
+      if(o.isMesh){
+        meshes.push(o);
+        const m=o.material;
+        if(m){m.side=THREE.DoubleSide;if(m.envMapIntensity!==undefined)m.envMapIntensity=0;if(m.roughness!==undefined)m.roughness=Math.min(m.roughness,.55);}
+      }
+    });
+    scene.add(raven);buildSurface();
+    controls.target.set(0,0,0);
+    ok();
+  },bad)));
+}
+
+/* ---------- particles ---------- */
+const F=900,K=12,SM=60000,CELL=.12;
+let surf=null,cursor=0,dirty=false,sNx=0,sNy=1,sNz=0,sD=0;
+const _v=new THREE.Vector3(),_n=new THREE.Vector3(),_nm=new THREE.Matrix3(),_m=new THREE.Vector3();
+const R=(a,b)=>a+Math.random()*(b-a);
+const sm=(a,b,x)=>{x=Math.min(1,Math.max(0,(x-a)/(b-a)));return x*x*(3-2*x)};
+/* WHERE the effect lives: fades in from 40% to 80% of the model's height, and avoids down-facing surfaces */
+const ZONE_START=.4,ZONE_FULL=.8,MIN_UP=-.5,MAX_UP=.25,ZONE_STOP=.3;
+const ck=(x,y,z)=>(x+64)+(y+64)*128+(z+64)*16384;
+/* surface point cloud + spatial hash: fibers are laid onto the feathers once, when born */
+function buildSurface(){
+  const tot=meshes.reduce((a,m)=>a+m.geometry.attributes.position.count,0);
+  const P=new Float32Array(SM*3),Nn=new Float32Array(SM*3),grid=new Map();
+  for(let q=0;q<SM;q++){
+    let r=Math.random()*tot,m=meshes[0];
+    for(const mm of meshes){const c=mm.geometry.attributes.position.count;if(r<c){m=mm;break}r-=c}
+    const g=m.geometry,v=Math.min(g.attributes.position.count-1,r|0);
+    _v.fromBufferAttribute(g.attributes.position,v).applyMatrix4(m.matrixWorld);
+    _n.set(0,1,0);
+    if(g.attributes.normal){_nm.getNormalMatrix(m.matrixWorld);_n.fromBufferAttribute(g.attributes.normal,v).applyMatrix3(_nm).normalize()}
+    P[q*3]=_v.x;P[q*3+1]=_v.y;P[q*3+2]=_v.z;Nn[q*3]=_n.x;Nn[q*3+1]=_n.y;Nn[q*3+2]=_n.z;
+    const k=ck(Math.floor(_v.x/CELL),Math.floor(_v.y/CELL),Math.floor(_v.z/CELL));
+    let a=grid.get(k);if(!a)grid.set(k,a=[]);a.push(q);
+  }
+  surf={P,N:Nn,grid};
+}
+function sample(x,y,z){ // smoothed surface normal + height of (x,y,z) above the feathers
+  const cx=Math.floor(x/CELL),cy=Math.floor(y/CELL),cz=Math.floor(z/CELL),P=surf.P,Nn=surf.N;
+  let best=1e9,bi=-1,ax=0,ay=0,az=0;
+  for(let a=-1;a<=1;a++)for(let b=-1;b<=1;b++)for(let c=-1;c<=1;c++){
+    const l=surf.grid.get(ck(cx+a,cy+b,cz+c));if(!l)continue;
+    for(const q of l){const dx=P[q*3]-x,dy=P[q*3+1]-y,dz=P[q*3+2]-z,d2=dx*dx+dy*dy+dz*dz;
+      if(d2<best){best=d2;bi=q}
+      if(d2<.0049){ax+=Nn[q*3];ay+=Nn[q*3+1];az+=Nn[q*3+2]}}
+  }
+  if(bi<0||best>.04)return false;
+  const m=Math.hypot(ax,ay,az);
+  if(m<1e-3){ax=Nn[bi*3];ay=Nn[bi*3+1];az=Nn[bi*3+2]}else{ax/=m;ay/=m;az/=m}
+  sNx=ax;sNy=ay;sNz=az;sD=(x-P[bi*3])*ax+(y-P[bi*3+1])*ay+(z-P[bi*3+2])*az;return true;
+}
+/* fiber buffers: each fiber is a K-point ribbon; its life/colour animation runs on the GPU */
+const V=F*K*2,A=n=>new Float32Array(V*n);
+const pP=A(3),pPrev=A(3),pNext=A(3),pCol=A(3),pCol2=A(3),pTime=A(2),pW=A(1),pSide=A(1),pT=A(1);
+const idx=new Uint16Array(F*(K-1)*6);
+for(let f=0;f<F;f++)for(let j=0;j<K;j++){
+  for(let s=0;s<2;s++){const v=(f*K+j)*2+s;pSide[v]=s?1:-1;pT[v]=j/(K-1);pTime[v*2]=-1e6;pTime[v*2+1]=1}
+  if(j<K-1){const a=(f*K+j)*2;idx.set([a,a+1,a+2,a+1,a+3,a+2],(f*(K-1)+j)*6)}
+}
+const geo=new THREE.BufferGeometry();
+const at=(n,a,c,d)=>geo.setAttribute(n,new THREE.BufferAttribute(a,c).setUsage(d?THREE.DynamicDrawUsage:THREE.StaticDrawUsage));
+at('position',pP,3,1);at('aPrev',pPrev,3,1);at('aNext',pNext,3,1);at('aCol',pCol,3,1);at('aCol2',pCol2,3,1);at('aTime',pTime,2,1);at('aW',pW,1,1);at('aSide',pSide,1);at('aT',pT,1);
+geo.setIndex(new THREE.BufferAttribute(idx,1));
+const dyn=['position','aPrev','aNext','aCol','aCol2','aTime','aW'];
+const pmat=new THREE.ShaderMaterial({
+  transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,side:THREE.DoubleSide,
+  uniforms:{uRes:{value:new THREE.Vector2(1,1)},uTime:{value:0},uSoft:{value:.6},uBright:{value:1},uMinPx:{value:1.3}},
+  vertexShader:`attribute vec3 aPrev;attribute vec3 aNext;attribute vec3 aCol;attribute vec3 aCol2;attribute vec2 aTime;attribute float aW;attribute float aSide;attribute float aT;
+  uniform vec2 uRes;uniform float uTime;uniform float uSoft;uniform float uBright;uniform float uMinPx;varying float vW;varying vec3 vC;varying float vA;varying vec2 vU;
+  void main(){
+    float u=(uTime-aTime.x)/aTime.y;vU=vec2(aT,aSide);vC=vec3(0.);vA=0.;vW=1.+4.*uSoft;
+    if(u<0.||u>1.){gl_Position=vec4(2.,2.,2.,1.);return;}
+    float L=u<.12?sin(1.5708*u/.12):pow(1.-(u-.12)/.88,1.6);                       // 0 -> 1 -> 0 across the fiber's life
+    vC=mix(aCol,aCol2,L);vC=mix(vC,vec3(vC.r,vC.g*1.35,vC.b*.5),.35*sin(3.14159*aT));vA=pow(L,1.2)*uBright;
+    vec4 m0=modelViewMatrix*vec4(position,1.);
+    vec4 c0=projectionMatrix*m0,c1=projectionMatrix*(modelViewMatrix*vec4(aPrev,1.)),c2=projectionMatrix*(modelViewMatrix*vec4(aNext,1.));
+    float asp=uRes.x/uRes.y;
+    vec2 d=(c2.xy/c2.w-c1.xy/c1.w)*vec2(asp,1.);float l=length(d);
+    vec2 n=l>1e-6?vec2(-d.y,d.x)/l:vec2(0.,1.);
+    float w=max(aW*projectionMatrix[1][1]/max(.1,-m0.z),uMinPx/uRes.y)*(.3+.7*sin(3.14159*aT))*vW;
+    vec2 s=c0.xy/c0.w+vec2(n.x/asp,n.y)*w*aSide;
+    gl_Position=vec4(s*c0.w,c0.z,c0.w);
+  }`,
+  fragmentShader:`uniform float uSoft;varying float vW;varying vec3 vC;varying float vA;varying vec2 vU;
+  void main(){float ay=abs(vU.y);float core=exp(-ay*ay*2.5*vW*vW),halo=min(uSoft,1.5)*.45*exp(-ay*ay*3.);float a=(core+halo)*(1.-smoothstep(.7,1.,ay))*pow(sin(3.14159*vU.x),.6);gl_FragColor=vec4(vC*a*vA,a*vA);}`
+});
+const fib=new THREE.Mesh(geo,pmat);fib.frustumCulled=false;scene.add(fib);
+
+const pts=new Float32Array(K*3),rs=new Float32Array(K*3);
+function spawn(bi,boost=1){
+  if(!surf||!BANDS[bi].on)return;
+  const b=BANDS[bi],P=surf.P,Nn=surf.N,H=box.max.y-box.min.y;
+  if(b.hv!==S.hue){b.hv=S.hue;b.hc=rot(b.col,S.hue);b.hc2=rot(b.col2,S.hue)}
+  let q=-1;
+  for(let t=0;t<60&&q<0;t++){const c=(Math.random()*SM)|0,h=(P[c*3+1]-box.min.y)/H;
+    if(Math.random()<sm(S.zone,S.zone+.4,h)*sm(MIN_UP,MAX_UP,Nn[c*3+1]))q=c}
+  if(q<0)return;
+  let px=P[q*3],py=P[q*3+1],pz=P[q*3+2];
+  const tl=Math.hypot(px,pz)||1,sg=Math.random()<.5?1:-1;
+  let dx=-pz/tl*sg,dy=R(-.15,.7),dz=px/tl*sg;
+  const ds=R(.28,.7)*b.len*(.8+.3*boost)*S.length/(K-1),curl=R(-1.5,1.5)*S.curl;
+  let n=0;
+  for(;n<K;n++){   // walk along the surface, snapping to it, bending gently
+    if(!sample(px,py,pz))break;
+    px-=sNx*(sD-.012);py-=sNy*(sD-.012);pz-=sNz*(sD-.012);
+    if((py-box.min.y)/H<S.zone*.75)break;   // fibers don't creep down into the lower body / branch
+    pts[n*3]=px;pts[n*3+1]=py;pts[n*3+2]=pz;
+    const dd=dx*sNx+dy*sNy+dz*sNz;dx-=sNx*dd;dy-=sNy*dd;dz-=sNz*dd;
+    const cx=sNy*dz-sNz*dy,cy=sNz*dx-sNx*dz,cz=sNx*dy-sNy*dx;
+    dx+=cx*curl*ds;dy+=cy*curl*ds;dz+=cz*curl*ds;
+    const m=Math.hypot(dx,dy,dz)||1;dx/=m;dy/=m;dz/=m;
+    px+=dx*ds;py+=dy*ds;pz+=dz*ds;
+  }
+  if(n<4)return;
+  for(let j=0;j<K;j++){const s2=j/(K-1)*(n-1),i0=Math.floor(s2),i1=Math.min(i0+1,n-1),fr=s2-i0;
+    for(let c=0;c<3;c++)rs[j*3+c]=pts[i0*3+c]*(1-fr)+pts[i1*3+c]*fr}
+  for(let j=1;j<K-1;j++)for(let c=0;c<3;c++)pts[j*3+c]=.25*rs[(j-1)*3+c]+.5*rs[j*3+c]+.25*rs[(j+1)*3+c];
+  for(let c=0;c<3;c++){pts[c]=rs[c];pts[(K-1)*3+c]=rs[(K-1)*3+c]}
+  const f=cursor;cursor=(cursor+1)%F;
+  const lf=R(b.life[0],b.life[1])*S.life,w=R(b.size[0],b.size[1])*.12*S.thick,br=.5+.45*boost;
+  for(let j=0;j<K;j++)for(let s2=0;s2<2;s2++){
+    const v=(f*K+j)*2+s2,a=Math.max(j-1,0),c2=Math.min(j+1,K-1);
+    for(let c=0;c<3;c++){
+      pP[v*3+c]=pts[j*3+c];pPrev[v*3+c]=pts[a*3+c];pNext[v*3+c]=pts[c2*3+c];
+      pCol[v*3+c]=b.hc2[c]*.22;pCol2[v*3+c]=(b.hc[c]*.6+.4)*br;
+    }
+    pTime[v*2]=T;pTime[v*2+1]=lf;pW[v]=w;
+  }
+  dirty=true;const mi=(K>>1)*3;
+  _m.set(pts[mi]+sNx*.2,pts[mi+1]+sNy*.2,pts[mi+2]+sNz*.2);b.cen.lerp(_m,.25);
+}
+
+/* ---------- audio ---------- */
+const aud=$('aud');let actx,an,src,fd,onsetAvg=0,lastBeat=0,hasAudio=false,loudness=0;
+function initAudio(){
+  if(actx)return;
+  actx=new (window.AudioContext||window.webkitAudioContext)();
+  an=actx.createAnalyser();an.fftSize=2048;an.smoothingTimeConstant=.72;
+  src=actx.createMediaElementSource(aud);src.connect(an);an.connect(actx.destination);
+  fd=new Uint8Array(an.frequencyBinCount);
+}
+aud.loop=LOOP_SONG;aud.volume=.9;
+
+function analyse(dt,t){
+  const playing=hasAudio&&!aud.paused&&an;
+  let raw=[0,0,0,0];
+  if(playing){
+    an.getByteFrequencyData(fd);
+    const hz=actx.sampleRate/an.fftSize;
+    BANDS.forEach((b,k)=>{
+      const lo=Math.max(1,Math.floor(b.f[0]/hz)),hi=Math.min(fd.length-1,Math.ceil(b.f[1]/hz));
+      let s=0;for(let i=lo;i<=hi;i++)s+=fd[i];raw[k]=s/(hi-lo+1)/255;
+    });
+  }else{ // idle breathing so the scene is never dead
+    raw=[0,0,0,0];
+  }
+  let tot=0;
+  BANDS.forEach((b,k)=>{
+    b.peak=Math.max(raw[k],b.peak*(1-dt*.12),.12);    // adaptive normalisation per band
+    const n=Math.min(1,Math.pow(raw[k]/b.peak,2.2)*S.sens)*Math.min(1,raw[k]*14);
+    b.e+=(n-b.e)*(n>b.e?Math.min(1,dt*18):Math.min(1,dt*3.2)); // fast attack, slow release
+    const fl=Math.max(0,b.e-b.avg);b.avg+=(b.e-b.avg)*Math.min(1,dt*4);
+    b.hit=(playing&&fl>.06&&t-b.last>.09)?(b.last=t,fl):0;   // per-band onset
+    tot+=b.e;
+  });
+  loudness+=(tot/4-loudness)*Math.min(1,dt*6);
+  // bass onset (kick) detection
+  const flux=Math.max(0,BANDS[0].e-onsetAvg);onsetAvg+=(BANDS[0].e-onsetAvg)*Math.min(1,dt*3);
+  let beat=false;
+  if(playing&&flux>.16&&t-lastBeat>.22){beat=true;lastBeat=t}
+  return {beat,playing};
+}
+
+/* ---------- composer ---------- */
+const composer=new THREE.EffectComposer(renderer);
+composer.addPass(new THREE.RenderPass(scene,camera));
+THREE.BokehShader.fragmentShader=THREE.BokehShader.fragmentShader.replace('float factor = ( focus + viewZ );','float factor = getDepth( vUv ) > .999 ? 0. : ( focus + viewZ );');
+const bokeh=new THREE.BokehPass(scene,camera,{focus:5,aperture:.006,maxblur:.01,width:innerWidth,height:innerHeight});
+composer.addPass(bokeh);
+const bokehRender=bokeh.render;
+bokeh.render=function(...a){const v=stars.visible;stars.visible=false;bokehRender.apply(this,a);stars.visible=v};   // depth of field, applied before bloom
+const bloom=new THREE.UnrealBloomPass(new THREE.Vector2(512,512),.9,.7,.25);
+composer.addPass(bloom);
+const dream=new THREE.ShaderPass({
+  uniforms:{tDiffuse:{value:null},uVig:{value:.4},uCA:{value:.01},uGrain:{value:.03},uTime:{value:0}},
+  vertexShader:`varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+  fragmentShader:`uniform sampler2D tDiffuse;uniform float uVig,uCA,uGrain,uTime;varying vec2 vUv;
+  void main(){
+    vec2 p=vUv-.5;vec2 off=p*dot(p,p)*uCA*4.;
+    vec3 c=vec3(texture2D(tDiffuse,vUv+off).r,texture2D(tDiffuse,vUv).g,texture2D(tDiffuse,vUv-off).b);
+    c*=1.-uVig*smoothstep(.2,.9,length(p)*1.4);
+    float g=fract(sin(dot(vUv*vec2(1731.,911.)+uTime,vec2(12.9898,78.233)))*43758.5453);
+    c*=1.+(g-.5)*uGrain*4.;
+    gl_FragColor=vec4(max(c,0.),1.);}`
+});
+composer.addPass(dream);
+function resize(){
+  const w=innerWidth,h=innerHeight;
+  renderer.setSize(w,h);composer.setSize(w,h);camera.aspect=w/h;camera.updateProjectionMatrix();
+  pmat.uniforms.uRes.value.set(w*renderer.getPixelRatio(),h*renderer.getPixelRatio());
+}
+addEventListener('resize',resize);resize();
+
+/* ---------- loop ---------- */
+const clock=new THREE.Clock();let T=0;
+function frame(){
+  requestAnimationFrame(frame);
+  const dt=Math.min(clock.getDelta(),.05);T+=dt;
+  const {beat,playing}=analyse(dt,T);
+
+  // spawn per band: rate follows that band's energy
+  BANDS.forEach((b,k)=>{
+    b.acc+=playing?b.e*b.e*b.gain*.3*S.density*dt:0;
+    while(b.acc>=1){spawn(k,.5+b.e);b.acc--}
+    if(b.hit){b.kick=Math.min(1.5,(b.kick||0)+.6+b.hit*2);const nb=Math.round((2+b.hit*14)*S.density);for(let q=0;q<nb;q++)spawn(k,.6+b.hit*2)}
+  });
+  if(beat){for(let i=0;i<4*S.density;i++)spawn(0,1.4)}
+
+  pmat.uniforms.uTime.value=T;pmat.uniforms.uSoft.value=S.soft;pmat.uniforms.uBright.value=S.bright;pmat.uniforms.uMinPx.value=1.3*S.thick;
+  if(dirty){dyn.forEach(n=>geo.attributes[n].needsUpdate=true);dirty=false}
+
+  // lights follow their particle clouds, brighten with their band
+  BANDS.forEach(b=>{b.light.position.lerp(b.cen,Math.min(1,dt*3/S.lsmooth));b.kick=(b.kick||0)*Math.exp(-dt*2.4/S.lsmooth);const tg=b.on?(.05+b.e*1.2+b.kick*4.5)*S.lights:0;b.li=b.li||0;b.li+=(tg-b.li)*Math.min(1,dt*30);b.light.intensity=b.li});
+  bloom.strength=(.35+loudness*.6)*S.glow;bloom.radius=Math.min(1,.3+.35*S.soft);
+  moon.intensity=.55*S.moon;sky.intensity=.25*S.moon;
+  smat.uniforms.uT.value=T;smat.uniforms.uAmt.value=S.stars;smat.uniforms.uTw.value=BANDS[3].e;smat.uniforms.uPx.value=renderer.getPixelRatio();
+  stars.visible=S.stars>0;stars.rotation.y+=dt*.004;     // very slow drift
+  dream.uniforms.uTime.value=T%100;dream.uniforms.uVig.value=.8*S.vig;dream.uniforms.uCA.value=.012*S.ca*(.6+loudness*2);dream.uniforms.uGrain.value=.05*S.grain;
+  bokeh.enabled=S.dof>0;   // focus follows the orbit target, so the bird stays sharp as you zoom
+  bokeh.uniforms.focus.value=camera.position.distanceTo(controls.target)+S.focus;
+  bokeh.uniforms.aperture.value=.02*S.dof;bokeh.uniforms.maxblur.value=Math.min(.08,.03*S.dof);
+
+  controls.update();composer.render();
+}
+frame();
+
+/* ---------- start-up: load raven + song, then 'Tap to play' ---------- */
+const veil=$('veil'),txt=$('txt');let ready=false,started=false;
+const songReady=new Promise((ok,bad)=>{
+  const t=setTimeout(ok,8000);                         // don't wait forever on slow connections
+  aud.oncanplaythrough=()=>{clearTimeout(t);ok()};
+  aud.onerror=()=>{clearTimeout(t);bad(new Error(SONG_URL+' not found'))};
+  aud.preload='auto';aud.src=SONG_URL;
+});
+Promise.all([loadGLB(),songReady])
+  .then(()=>{ready=true;veil.classList.add('ready');txt.textContent='Tap to play'})
+  .catch(e=>{console.error(e);txt.textContent='Could not load — '+e.message});
+veil.onclick=()=>{
+  if(!ready||started)return;started=true;
+  initAudio();hasAudio=true;actx.resume();aud.play().catch(()=>{});
+  veil.classList.add('gone');
+};
+document.addEventListener('visibilitychange',()=>{          // stay quiet when the tab/page is hidden
+  if(!started)return;
+  if(document.hidden)aud.pause();else{actx.resume();aud.play().catch(()=>{})}
+});
+</script>
+</body>
+</html>
