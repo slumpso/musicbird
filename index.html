@@ -41,9 +41,6 @@ const MODEL_URL='raven.glb';   // the raven model, same folder as this page
 const SONG_URL='song.mp3';     // <-- your song goes here (same folder). Change the name if you like.
 const LOOP_SONG=true;          // repeat the song
 const ALLOW_DRAG_ROTATE=true;  // let visitors drag to rotate the view
-const ALLOW_ZOOM=true;         // let visitors zoom a little (mouse wheel / pinch)
-const ZOOM_IN=0.8;             // closest they can get = 80% of the starting distance (smaller = can get closer)
-const ZOOM_OUT=1.25;           // farthest they can get = 125% of the starting distance
 const S={density:1.55,length:.85,thick:1.45,soft:.93,bright:2.25,glow:1.8,lights:0,life:1.6,sens:.85,curl:.7,hue:0,zone:.38,
   spin:.15,dof:2.25,focus:0,lsmooth:1.85,stars:1.9,ca:.1,grain:1.2,vig:.5,moon:.75};
 /* ================================== */
@@ -58,7 +55,7 @@ scene.fog=new THREE.FogExp2(0x010204,0.12);
 const camera=new THREE.PerspectiveCamera(38,1,.05,60);
 camera.position.set(2.1,1.0,3.4);
 const controls=new THREE.OrbitControls(camera,renderer.domElement);
-controls.enableDamping=true;controls.autoRotate=true;controls.autoRotateSpeed=S.spin;controls.enableZoom=ALLOW_ZOOM;controls.zoomSpeed=.6;controls.enablePan=false;controls.enableRotate=ALLOW_DRAG_ROTATE;const D0=camera.position.length();controls.minDistance=D0*ZOOM_IN;controls.maxDistance=D0*ZOOM_OUT;
+controls.enableDamping=true;controls.autoRotate=true;controls.autoRotateSpeed=S.spin;controls.enableZoom=false;controls.enablePan=false;controls.enableRotate=ALLOW_DRAG_ROTATE;controls.maxDistance=9;controls.minDistance=1.2;
 
 /* ---------- lights: one soft colored light per frequency band, following its particles ---------- */
 const BANDS=[
